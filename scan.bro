@@ -9,7 +9,7 @@ export {
 		PortScan,
 		};
 
-	const do_analyze_addr_scan = F &redef;
+	const do_analyze_addr_scan = T &redef;
 	const do_analyze_port_scan = T &redef;
 
 	const id_addr_scan = "CONNECTION_FAILED_ADDR";
@@ -35,7 +35,7 @@ export {
 	const suppress_ICMP_port_scan_checks = T &redef;
 
 	global addr_scan_thresh_series: vector of count = vector(100, 200, 300);
-	global port_scan_thresh_series: vector of count = vector(1, 2, 3);
+	global port_scan_thresh_series: vector of count = vector(10, 20, 30);
 
 	# These are for address scan only
 	# Which services should be analyzed when detecting scanning
@@ -62,6 +62,28 @@ export {
 
 }
 
+function isFailedConn(c: connection): bool
+	{
+	# Sr || ( (hR || ShR) && (data not sent in any direction) ) 
+	if ( (c$orig$state == TCP_SYN_SENT && c$resp$state == TCP_RESET) ||
+		 (  ((c$orig$state == TCP_RESET && c$resp$state == TCP_SYN_ACK_SENT) ||
+		     (c$orig$state == TCP_RESET && c$resp$state == TCP_ESTABLISHED && "S" in c$history )) &&
+		     !("D" in c$history || "d" in c$history)) )
+		return T;
+	return F;
+	}
+
+function isReverseFailedConn(c: connection): bool
+	{
+	# reverse scan i.e. conn dest is the scanner
+	# sR || ( (Hr || sHr) && (data not sent in any direction) ) 
+	if ( (c$resp$state == TCP_SYN_SENT && c$orig$state == TCP_RESET) ||
+		 (  ((c$resp$state == TCP_RESET && c$orig$state == TCP_SYN_ACK_SENT) ||
+		     (c$resp$state == TCP_RESET && c$orig$state == TCP_ESTABLISHED && "s" in c$history )) &&
+		     !("D" in c$history || "d" in c$history)) )
+		return T;
+	return F;
+	}
 
 function addr_scan_predicate(index: Metrics::Index, str: string): bool
 	{
@@ -130,14 +152,6 @@ function port_scan_predicate(index: Metrics::Index, str: string): bool
 	return T;
 	}
 
-
-#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-# IP Sweep: table [src_ip, port] of set(dst);
-# Port Sweep: table[src_ip, dst_ip] of set(port);
-#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-
 function check_addr_scan_threshold(index: Metrics::Index, default_thresh: count, 
 				val: count ): bool
 	{
@@ -181,7 +195,8 @@ function port_scan_threshold_crossed(index: Metrics::Index, val: count )
 
 function analyze_addr_scan()
 	{
-	addr_scan_custom_thresholds[80/tcp] = 4;
+	# note=> Addr scan: table [src_ip, port] of set(dst);
+	addr_scan_custom_thresholds[445/tcp] = 50;
 
 	# Add filters to the metrics so that the metrics framework knows how to
 	# determine when it looks like an actual attack and how to respond when
@@ -198,6 +213,7 @@ function analyze_addr_scan()
 
 function analyze_port_scan()
 	{
+	# note=> Port Sweep: table[src_ip, dst_ip] of set(port);
 	# Add filters to the metrics so that the metrics framework knows how to
 	# determine when it looks like an actual attack and how to respond when
 	# thresholds are crossed.
@@ -207,8 +223,8 @@ function analyze_port_scan()
 	#$trigger_custom_check_threshold = 1,
 	$threshold_crossed = port_scan_threshold_crossed, 
 	$break_interval = conn_failed_port_interval,
-	$threshold_series = port_scan_thresh_series]);
-	#$default_threshold = default_port_scan_threshold]); 
+	#$threshold_series = port_scan_thresh_series,
+	$default_threshold = default_port_scan_threshold]); 
 	}
 
 event bro_init() &priority=3
@@ -269,6 +285,8 @@ function endpoint_state_name( num: count): string
 	# I am not taking *f cases of c$history into account. Ask Seth if I should
 #	}
 
+
+
 ## Generated for an unsuccessful connection attempt. This 
 ## event is raised when an originator unsuccessfully attempted 
 ## to establish a connection. “Unsuccessful” is defined as at least 
@@ -282,9 +300,7 @@ event connection_attempt(c: connection)
 	if ( "S" in c$history )
 		is_reverse_scan = F;
 	else if ( "H" in c$history )
-		is_reverse_scan = T;
-
-	
+		is_reverse_scan = T;	
 	
 	local scanner = c$id$orig_h;
 	local victim = c$id$resp_h;
@@ -338,23 +354,16 @@ event connection_reset(c: connection)
 	local is_reverse_scan = F;
 	local is_scan = F;
 
-	# (hR || ShR ) && (data not sent in any direction) 
-	if ( ((c$orig$state == TCP_RESET && c$resp$state == TCP_SYN_ACK_SENT) ||
-		     (c$orig$state == TCP_RESET && c$resp$state == TCP_ESTABLISHED && "S" in c$history )) &&
-		     !("D" in c$history || "d" in c$history) )
+	if (isFailedConn(c))
 		{
-		is_reverse_scan = F; 
 		is_scan = T;
+		is_reverse_scan = F;
 		}
 
-	# reverse scan i.e. conn dest is the scanner
-	# (Hr || sHr) && (data not sent in any direction) 
-	else if ( ((c$resp$state == TCP_RESET && c$orig$state == TCP_SYN_ACK_SENT) ||
-		     (c$resp$state == TCP_RESET && c$orig$state == TCP_ESTABLISHED && "s" in c$history )) &&
-		     !("D" in c$history || "d" in c$history) )
-		{	
-		is_reverse_scan = T; 
+	else if (isReverseFailedConn(c))
+		{
 		is_scan = T;
+		is_reverse_scan = T;
 		}
 
 	if ( is_scan )
@@ -377,28 +386,19 @@ event connection_reset(c: connection)
 ## Generated for each still-open connection when Bro terminates.
 event connection_pending(c: connection)
 	{
-	local is_reverse_scan = F;
+		local is_reverse_scan = F;
 	local is_scan = F;
 
-	# Sr || ( (hR || ShR) && (data not sent in any direction) ) 
-	if ( (c$orig$state == TCP_SYN_SENT && c$resp$state == TCP_RESET) ||
-		 (  ((c$orig$state == TCP_RESET && c$resp$state == TCP_SYN_ACK_SENT) ||
-		     (c$orig$state == TCP_RESET && c$resp$state == TCP_ESTABLISHED && "S" in c$history )) &&
-		     !("D" in c$history || "d" in c$history)) )
+	if (isFailedConn(c))
 		{
-		is_reverse_scan = F; 
 		is_scan = T;
+		is_reverse_scan = F;
 		}
 
-	# reverse scan i.e. conn dest is the scanner
-	# sR || ( (Hr || sHr) && (data not sent in any direction) ) 
-	else if ( (c$resp$state == TCP_SYN_SENT && c$orig$state == TCP_RESET) ||
-		 (  ((c$resp$state == TCP_RESET && c$orig$state == TCP_SYN_ACK_SENT) ||
-		     (c$resp$state == TCP_RESET && c$orig$state == TCP_ESTABLISHED && "s" in c$history )) &&
-		     !("D" in c$history || "d" in c$history)) )
-		{	
-		is_reverse_scan = T; 
+	else if (isReverseFailedConn(c))
+		{
 		is_scan = T;
+		is_reverse_scan = T;
 		}
 
 	if ( is_scan )
