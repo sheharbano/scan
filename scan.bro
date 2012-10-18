@@ -386,7 +386,7 @@ event connection_reset(c: connection)
 ## Generated for each still-open connection when Bro terminates.
 event connection_pending(c: connection)
 	{
-		local is_reverse_scan = F;
+	local is_reverse_scan = F;
 	local is_scan = F;
 
 	if (isFailedConn(c))
