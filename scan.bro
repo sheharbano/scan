@@ -16,46 +16,42 @@ export {
 	const id_port_scan = "CONNECTION_FAILED_PORT";
 
 	## Interval at which to watch for the
-	## :bro:id:`Scan::conn_failed_port/addr_threshold` variable to be crossed.
+	## :bro:id:`Scan::conn_failed_(port|addr)_threshold` variable to be crossed.
 	## At the end of each interval the counter is reset.
 	const conn_failed_addr_interval = 5min &redef;
 	const conn_failed_port_interval = 5min &redef;
 
-	const default_addr_scan_threshold = 2 &redef;
-	const default_port_scan_threshold = 1 &redef;
+	const default_addr_scan_threshold = 25 &redef;
+	const default_port_scan_threshold = 15 &redef;
 
 	# For address scan
 	const suppress_UDP_scan_checks = T &redef;
 	const suppress_TCP_scan_checks = F &redef;
 	const suppress_ICMP_scan_checks = T &redef;
 	
-	# For port scan
-	const suppress_UDP_port_scan_checks = T &redef;
-	const suppress_TCP_port_scan_checks = F &redef;
-	const suppress_ICMP_port_scan_checks = T &redef;
 
 	global addr_scan_thresh_series: vector of count = vector(100, 200, 300);
 	global port_scan_thresh_series: vector of count = vector(10, 20, 30);
 
-	# These are for address scan only
-	# Which services should be analyzed when detecting scanning
-	# (not consulted if analyze_all_services is set).
+	#====================Blacklisting/Whitelisting services===============
+	# For blacklisting (this wont be checked if 
+	# ::analyze_all_services:: = T )
 	const analyze_services: set[port] &redef;
+	# For whitelisting, set ::analyze_all_services:: = T
+	# and define the whitelisted services in ::skip_services::
 	const analyze_all_services = T &redef;
-	# This is consulted only if analyze_services is enabled
-	# e.g. detect scan for all but the services in dont_analyze_services
-	const dont_analyze_services: set[port] &redef;
+	const skip_services: set[port] &redef;
 
-	# In port scan, don't account for these ports
-	const skip_port_scan_services: set[port] &redef;
+	#====================Blacklisting/Whitelisting hosts===============
+	const analyze_hosts: set[addr] &redef;
+	const analyze_all_hosts = T &redef;
+	const skip_hosts: set[addr] &redef;
 
-	# Don't track scanning for these hosts
-	const skip_scan_sources: set[addr] &redef;
-	const skip_port_scan_sources: set[addr] &redef;
+	#====================Blacklisting/Whitelisting subnets===============
+	const analyze_subnets: set[subnet] &redef;
+	const analyze_all_subnets = T &redef;
+	const skip_subnets: set[subnet] &redef;
 
-	# Don't track scanning for hosts from these subnets
-	const skip_scan_nets: set[subnet] = {} &redef;
-	const skip_port_scan_nets: set[subnet] = {} &redef;
 
 	# Custom threholds based on service for address scan
 	const addr_scan_custom_thresholds: table[port] of count &redef;
@@ -87,19 +83,8 @@ function isReverseFailedConn(c: connection): bool
 
 function addr_scan_predicate(index: Metrics::Index, str: string): bool
 	{
-	# enable/disable scan detection for specific hosts
-	if ( index$host in skip_scan_sources )
-		return F;
-
-	# enable/disable scan detection for specific services
 	local service = to_port(index$str);
-	if ( !analyze_all_services )
-		{
-		if ( service !in analyze_services )
-			return F;			
-		}
-	else if ( service in dont_analyze_services )
-		return F;
+	local host = index$host;
 
 	local transport_layer_proto = get_port_transport_proto(service);
 	if ( suppress_UDP_scan_checks && (transport_layer_proto == udp) )
@@ -109,10 +94,43 @@ function addr_scan_predicate(index: Metrics::Index, str: string): bool
 	else if ( suppress_ICMP_scan_checks && (transport_layer_proto == icmp) )
 		return F;
 
+	# Blacklisting/whitelisting services
+	if ( !analyze_all_services )
+		{
+		if ( service !in analyze_services )
+			return F;			
+		}
+	else if ( service in skip_services )
+		return F;
+
+	# Blacklisting/whitelisting hosts
+	if ( !analyze_all_hosts )
+		{
+		if ( host !in analyze_hosts )
+			return F;			
+		}
+	else if ( host in skip_hosts )
+		return F;
+
+	# Blacklisting/whitelisting subnets
+	if ( !analyze_all_subnets )
+		{
+		local host_in_analyze_subnets = F;		
+		for ( net in analyze_subnets )
+			{
+			if ( host in net )
+				{
+				host_in_analyze_subnets = T;
+				break;
+				}
+			}
+		if ( !host_in_analyze_subnets )
+			return F;
+		}
 
 	# saving this one for last as it requires
 	# relatively more processing
-	for ( net in skip_scan_nets )
+	for ( net in skip_subnets )
 		{
 		if ( index$host in net )
 			return F;
@@ -123,27 +141,54 @@ function addr_scan_predicate(index: Metrics::Index, str: string): bool
 
 function port_scan_predicate(index: Metrics::Index, str: string): bool
 	{
-	# enable/disable scan detection for specific hosts
-	if ( index$host in skip_port_scan_sources )
-		return F;
-
-	# enable/disable scan detection for specific services
 	local service = to_port(str);
-	if ( service in skip_port_scan_services )
-		return F;			
+	local host = index$host;
 
 	local transport_layer_proto = get_port_transport_proto(service);
-	if ( suppress_UDP_port_scan_checks && (transport_layer_proto == udp) )
+	if ( suppress_UDP_scan_checks && (transport_layer_proto == udp) )
 		return F;
-	else if ( suppress_TCP_port_scan_checks && (transport_layer_proto == tcp) )
+	else if ( suppress_TCP_scan_checks && (transport_layer_proto == tcp) )
 		return F;
-	else if ( suppress_ICMP_port_scan_checks && (transport_layer_proto == icmp) )
+	else if ( suppress_ICMP_scan_checks && (transport_layer_proto == icmp) )
 		return F;
 
+	# Blacklisting/whitelisting services
+	if ( !analyze_all_services )
+		{
+		if ( service !in analyze_services )
+			return F;			
+		}
+	else if ( service in skip_services )
+		return F;
+
+	# Blacklisting/whitelisting hosts
+	if ( !analyze_all_hosts )
+		{
+		if ( host !in analyze_hosts )
+			return F;			
+		}
+	else if ( host in skip_hosts )
+		return F;
+
+	# Blacklisting/whitelisting subnets
+	if ( !analyze_all_subnets )
+		{
+		local host_in_analyze_subnets = F;		
+		for ( net in analyze_subnets )
+			{
+			if ( host in net )
+				{
+				host_in_analyze_subnets = T;
+				break;
+				}
+			}
+		if ( !host_in_analyze_subnets )
+			return F;
+		}
 
 	# saving this one for last as it requires
 	# relatively more processing
-	for ( net in skip_port_scan_nets )
+	for ( net in skip_subnets )
 		{
 		if ( index$host in net )
 			return F;
@@ -177,27 +222,37 @@ function check_port_scan_threshold(index: Metrics::Index, default_thresh: count,
 
 function addr_scan_threshold_crossed(index: Metrics::Index, val: count )
 	{
+	local outbound = Site::is_local_addr(index$host);
+	local direction = "InboundScan";
+	if (outbound)
+		direction = "OutboundScan";
+
 	#print fmt("function: threshold_crossed, val is %d",val);
 	NOTICE([$note=AddressScan, $src=index$host,
 					$p=to_port(index$str),
+					$sub = direction,
 					$msg=fmt("%s scanned %d unique hosts on port %s",
 						index$host, val, index$str)]);
 	}
 
 function port_scan_threshold_crossed(index: Metrics::Index, val: count )
 	{
+	local outbound = Site::is_local_addr(index$host);
+	local direction = "InboundScan";
+	if (outbound)
+		direction = "OutboundScan";
+
 	#print fmt("function: threshold_crossed, val is %d",val);
 	NOTICE([$note=PortScan, $src=index$host,
 					$dst=to_addr(index$str),
+					$sub = direction,
 					$msg=fmt("%s scanned %d unique ports of host %s",
 						index$host, val, index$str)]);
 	}
 
 function analyze_addr_scan()
 	{
-	# note=> Addr scan: table [src_ip, port] of set(dst);
-	addr_scan_custom_thresholds[445/tcp] = 50;
-
+	# note=> Addr scan: table [src_ip, port] of set(dst);	
 	# Add filters to the metrics so that the metrics framework knows how to
 	# determine when it looks like an actual attack and how to respond when
 	# thresholds are crossed.
@@ -229,6 +284,10 @@ function analyze_port_scan()
 
 event bro_init() &priority=3
 	{
+	# Add local networks here to determine scan direction
+	# i.e. inbound scan / outbound scan
+	#add Site::local_nets[0.0.0.0/16];
+
 	if ( do_analyze_addr_scan )
 		analyze_addr_scan();
 
