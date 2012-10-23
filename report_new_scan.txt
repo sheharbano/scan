@@ -1,0 +1,173 @@
+********************************
+TEST DATA SPECS
+********************************
+200 GB data
+some split routing
+
+********************************
+OLD SCAN SCRIPT RUNTIME
+********************************
+real	164m23.072s
+user	166m40.949s
+sys	8m1.954s
+
+********************************
+NEW SCAN SCRIPT RUNTIME
+********************************
+
+===========================
+Only default threshold enabled
+===========================
+real	168m27.482s
+user	170m10.858s
+sys	7m20.708s
+
+===========================
+Default threshold and custom check threshold enabled
+===========================
+real	166m42.879s
+user	168m19.091s
+sys	7m31.416s
+
+============================
+With default threshold, custom threshold and predicate
+============================
+x
+x
+x
+x
+x
+
+Note: Memory usage was about 26% for all the cases
+
+********************************
+DETECTION RATE OF NEW SCAN SCRIPT WITH 
+REFERENCE TO OLD SCAN SCRIPT
+********************************
+
+True Positives (Hosts detected by both old and new scan scripts): 148	
+False Positives (Hosts detected by new scan script, but not by old): 2	
+False Negatives (Hosts detected by old scan script but not by new): 337
+
+****************************************
+ANALYZING FP and FN
+****************************************
+
+==================================
+FP (2)
+Analysis Approach: What does the msg in new scan's log file says about it?
+==================================
+X scanned 20 unique hosts on port 80/tcp
+Y scanned 20 unique hosts on port 80/tcp
+
+Justification: In the old scan script, scans on port 80/tcp are ignored
+
+==================================
+FN (237)
+Analysis Approach: For X = a randomly selected FN host
+do
+	cat conn.log | awk '$3=="X"{if($15!~/D/&&$15!~/d/) print $15"\t"$7;}' | sort | uniq -c | sort -rn | uniq > history.txt
+
+where $3: 	src ip
+      $7: 	proto
+      $15:	c$history
+
+explanation: new scan script does not consider those conns as failed that have D|d in c$history. Lets see apart from the D|d, which other conns result in failed conns for old scan script but perhaps not so for the new one.
+==================================
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+X1
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+   3676 S	tcp
+   1162 Sr	tcp
+     65 F	tcp
+     35 R	tcp
+     27 Si	tcp
+     15 h	tcp
+     14 f	tcp
+     14 Fa	tcp
+     13 -	icmp
+     11 SfAFa	tcp
+      8 ShAfFa	tcp
+      8 FfA	tcp
+      7 ShfAFa	tcp
+      5 Srh	tcp
+      3 Sah	tcp
+      2 Sh	tcp
+      2 ShAFaf	tcp
+      2 Sa	tcp
+      2 Rr	tcp
+      1 ShAFf	tcp
+      1 ShafAF	tcp
+      1 SA	tcp
+      1 FA	tcp
+      1 AF	tcp
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+X2
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   1087 S	tcp
+    692 -	icmp
+    100 Sr	tcp
+     22 Fa	tcp
+     16 R	tcp
+     16 F	tcp
+      2 SfAFa	tcp
+      1 ShfAFa	tcp
+      1 ShAfFa	tcp
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+X3
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  61 S	tcp
+  10 Sr	tcp
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+X4
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     50 ShAFf	tcp
+     44 S	tcp
+     33 Sr	tcp
+     12 ShAFaf	tcp
+      6 ShA	tcp
+      3 Si	tcp
+      3 Sh	tcp
+      3 ShAf	tcp
+      3 h	tcp
+      3 Fr	tcp
+      2 Shr	tcp
+      2 ShAFfa	tcp
+      2 r	tcp
+      2 -	icmp
+      1 ShAfFr	tcp
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
